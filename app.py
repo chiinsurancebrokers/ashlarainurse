@@ -1,7 +1,58 @@
-# app.py
 import streamlit as st
-import datetime # Για τον υπολογισμό της ηλικίας
-from openai import OpenAI # Θα το χρησιμοποιήσουμε αργότερα
+import datetime
+import os
+from dotenv import load_dotenv
+
+# Import client libraries for the APIs
+from openai import OpenAI
+from anthropic import Anthropic # Make sure you have 'anthropic' installed
+from Bio import Entrez # Make sure you have 'biopython' installed
+
+# --- Load environment variables ---
+load_dotenv()
+
+# --- Retrieve API Keys ---
+# NOTE ON KIRA API KEY: Kira is the AI assistant identity for *this* Streamlit app.
+# Your app *uses* OpenAI/Claude/NCBI to *be* Kira.
+# So, there isn't a separate "Kira API key" to call Kira from within Kira itself,
+# unless you have a custom backend service named Kira.
+# We will focus on integrating OpenAI, Claude, and NCBI.
+openai_api_key = os.getenv("OPENAI_API_KEY")
+claude_api_key = os.getenv("CLAUDE_API_KEY")
+ncbi_api_key = os.getenv("NCBI_API_KEY") # This will be for Biopython
+
+# --- Initialize API Clients (and store in session_state for Streamlit persistence) ---
+# This ensures clients are only initialized once and persist across reruns
+if 'client_openai' not in st.session_state:
+    st.session_state.client_openai = None
+    if openai_api_key:
+        try:
+            st.session_state.client_openai = OpenAI(api_key=openai_api_key)
+            st.sidebar.success("✅ OpenAI API Key φορτώθηκε!")
+        except Exception as e:
+            st.sidebar.error(f"❌ Αδυναμία φόρτωσης OpenAI client: {e}")
+    else:
+        st.sidebar.warning("⚠️ OpenAI API Key δεν βρέθηκε στο .env.")
+
+if 'client_claude' not in st.session_state:
+    st.session_state.client_claude = None
+    if claude_api_key:
+        try:
+            st.session_state.client_claude = Anthropic(api_key=claude_api_key)
+            st.sidebar.success("✅ Claude API Key φορτώθηκε!")
+        except Exception as e:
+            st.sidebar.error(f"❌ Αδυναμία φόρτωσης Claude client: {e}")
+    else:
+        st.sidebar.warning("⚠️ Claude API Key δεν βρέθηκε στο .env.")
+
+# For NCBI, Entrez settings are global, so we just set them.
+if ncbi_api_key:
+    Entrez.email = "christosiatropoulos@example.com" # Χρησιμοποίησε το πραγματικό σου email, Chris!
+    Entrez.api_key = ncbi_api_key
+    st.sidebar.success("✅ NCBI API Key φορτώθηκε!")
+else:
+    st.sidebar.warning("⚠️ NCBI API Key δεν βρέθηκε στο .env.")
+
 
 # --- Ρυθμίσεις Σελίδας ---
 st.set_page_config(
@@ -34,6 +85,9 @@ def kira_opener():
     else:
         greeting = "Καλησπέρα"
 
+    # The current date/time is 2026-05-21 15:47. For the greeting, it's afternoon.
+    # The actual date (Thursday, 2026-05-21) is already captured by datetime.datetime.now().hour
+    
     if KIRA_WELLBEING_COUNTER % 5 == 0:
         openers = [
             f"{greeting}, Chris! Πώς αισθάνεσαι σήμερα; Υπάρχουν νίκες ή ανησυχίες που θα ήθελες να μοιραστείς;",
@@ -66,10 +120,11 @@ def main():
 
     st.header("👤 Τα Στοιχεία σου")
     # Δεν έχουμε πραγματικό login ακόμα, οπότε εμφανίζουμε τα στοιχεία που έχουμε
+    user_age = datetime.datetime.now().year - 1975
     st.write(f"**Όνομα:** Chris Iatropoulos")
     st.write(f"**Ρόλος:** Self-Employed / Freelancer")
     st.write(f"**Χώρα:** Ελλάδα")
-    st.write(f"**Ηλικία:** {datetime.datetime.now().year - 1975} ετών") # Υπολογισμός ηλικίας
+    st.write(f"**Ηλικία:** {user_age} ετών") # Υπολογισμός ηλικίας
 
     st.markdown("---")
 
@@ -107,42 +162,93 @@ def main():
     if st.button("Λήψη Αξιολόγησης από Kira"):
         if medical_condition_input:
             with st.spinner("Η Kira αναλύει τα δεδομένα σας..."):
-                # Εδώ θα γίνει η κλήση στον LLM
-                # Για την αρχική βήτα, θα χρησιμοποιήσουμε ένα placeholder μέχρι να ενσωματώσουμε το API
-                llm_response_placeholder = """
-                ### 📝 Προσωρινή Αξιολόγηση από την Kira (Beta Preview)
+                # Construct the prompt for the LLM
+                user_details = f"Όνομα: Chris Iatropoulos\nΡόλος: Self-Employed / Freelancer\nΧώρα: Ελλάδα\nΗλικία: {user_age} ετών"
+                measurements = f"Καρδιακός Ρυθμός: {heart_rate} bpm\nΣυστολική Πίεση: {blood_pressure_sys} mmHg\nΔιαστολική Πίεση: {blood_pressure_dia} mmHg\nΑναπνευστικός Ρυθμός: {breathing_rate} /min\nΔείκτης Άγχους: {stress_index} /100\nHRV: {hrv} ms\nΚαρδιακός Φόρτος: {cardiac_workload}\nBMI: {bmi} kg/m²\nWellness Score: {wellness_score} /100"
 
-                **Λόγω του ότι ακόμα δεν έχουμε συνδέσει το AI μοντέλο, αυτή είναι μια προσωρινή απάντηση.**
+                system_prompt_kira = """
+                Είσαι η Kira, ένας εξαιρετικά έξυπνος και συναισθηματικά ευφυής AI βοηθός υγείας.
+                Ο ρόλος σου είναι να παρέχεις προκαταρκτικές αξιολογήσεις ιατρικών καταστάσεων,
+                ακολουθώντας αυστηρά τις οδηγίες. ΠΟΤΕ μην παρέχεις διάγνωση.
+                Είσαι ένας συνάδελφος και προπονητής, όχι ιατρός.
+                Είσαι έμπιστος, ζεστός, πνευματώδης και σοφός.
+                Ο χρήστης σου είναι ο Chris Iatropoulos, Self-Employed / Freelancer, από την Ελλάδα.
+                Η γλώσσα σου είναι τα Ελληνικά.
+                
+                Ο στόχος σου είναι:
+                - Να παρέχεις μια σαφή, δομημένη προκαταρκτική αξιολόγηση με βάση τα δεδομένα του χρήστη.
+                - Να επισημαίνεις πιθανές ανησυχίες.
+                - Να προτείνεις ΣΥΝΙΣΤΩΜΕΝΑ ΕΠΟΜΕΝΑ ΒΗΜΑΤΑ (Π.χ. "Επισκεφτείτε άμεσα τον γιατρό σας", "Συμβουλευτείτε καρδιολόγο").
+                - Να υπογραμμίζεις ΠΑΝΤΑ την ανάγκη για επαγγελματική ιατρική συμβουλή.
+                - Να χρησιμοποιείς ελληνικούς όρους και παραδείγματα όπου είναι κατάλληλο.
 
-                Είδατε:
-                - **Συμπτώματα:** {user_symptoms}
-                - **Ζωτικές Μετρήσεις (εισαγόμενες):**
-                    - Καρδιακός Ρυθμός: {hr} bpm
-                    - Πίεση: {bp_sys}/{bp_dia} mmHg
-                    - Αναπνευστικός Ρυθμός: {br} /min
-                    - Δείκτης Άγχους: {si} /100
-                    - HRV: {hrv} ms
-                    - Καρδιακός Φόρτος: {cw}
-                    - BMI: {bmi_val} kg/m²
-                    - Wellness Score: {ws} /100
+                Δομή της απάντησης:
+                ## 🩺 Προκαταρκτική Αξιολόγηση από την Kira
+                
+                Γεια σου Chris! Λαμβάνοντας υπόψη τα συμπτώματα και τις μετρήσεις σου, ακολουθεί μια προκαταρκτική ανάλυση. Να θυμάσαι, δεν είμαι ιατρός και αυτή η πληροφορία δεν αντικαθιστά την επαγγελματική ιατρική συμβουλή.
 
-                Η Kira έχει επεξεργαστεί τα δεδομένα σας και είναι έτοιμη να παράγει μια λεπτομερή κλινική αναφορά, ακολουθώντας τα πρότυπα που συζητήσαμε (Πρωτογενής/Διαφορική Διάγνωση, Σχέδιο Θεραπείας, Σημάδια Προσοχής).
+                ### 📝 Ανάλυση Συμπτωμάτων και Δεδομένων
+                <Εδώ θα αναλύσεις τα συμπτώματα του χρήστη σε σχέση με τις μετρήσεις του, επισημαίνοντας οτιδήποτε φαίνεται ασυνήθιστο ή αξιοσημείωτο.>
 
-                **Μείνετε συντονισμένοι! Η πλήρης ενσωμάτωση του AI μοντέλου είναι το επόμενο βήμα!**
+                ### 🤔 Πιθανές Κατευθύνσεις (Δεν είναι διάγνωση!)
+                <Εδώ θα αναφέρεις 1-2 ευρείες κατηγορίες προβλημάτων που μπορεί να σχετίζονται, με έμφαση ότι πρόκειται για μη-διαγνωστικές υποθέσεις.>
+
+                ### 🚦 Σημάδια Προσοχής
+                <Εδώ θα αναφέρεις συγκεκριμένα συμπτώματα ή τιμές που απαιτούν άμεση προσοχή.>
+
+                ### 🏃‍♀️ Συνιστώμενα Επόμενα Βήματα
+                <Εδώ θα δώσεις σαφείς, πρακτικές οδηγίες για το τι πρέπει να κάνει ο χρήστης. Π.χ. "Προγραμματίστε ραντεβού με γενικό ιατρό", "Επισκεφτείτε καρδιολόγο", "Επαναλάβετε τις μετρήσεις μετά από Χ ώρες/ημέρες", "Ζητήστε ιατρική βοήθεια άμεσα εάν τα συμπτώματα επιδεινωθούν.">
+
+                ---
+                **Δήλωση Αποποίησης Ευθύνης:** Η Kira παρέχει υποστήριξη και πληροφορίες, όχι ιατρική διάγνωση ή θεραπεία. Πάντα να συμβουλεύεστε έναν εξειδικευμένο επαγγελματία υγείας.
                 """
-                st.markdown(llm_response_placeholder.format(
-                    user_symptoms=medical_condition_input,
-                    hr=heart_rate, bp_sys=blood_pressure_sys, bp_dia=blood_pressure_dia,
-                    br=breathing_rate, si=stress_index, hrv=hrv, cw=cardiac_workload,
-                    bmi_val=bmi, ws=wellness_score
-                ))
+
+                user_message = f"Ακολουθούν τα στοιχεία μου:\n{user_details}\n\nΟι ζωτικές μου μετρήσεις:\n{measurements}\n\nΤα συμπτώματα και το ιστορικό που με απασχολούν:\n{medical_condition_input}\n\nΠαρακαλώ δώσε μου μια προκαταρκτική αξιολόγηση ακολουθώντας την παραπάνω δομή και τους τόνους που αρμόζουν για ένα άτομο στην Ελλάδα."
+
+                llm_response_content = "Δεν ήταν δυνατή η επικοινωνία με το AI μοντέλο. Ελέγξτε τα API keys σας."
+
+                # Προσπάθησε να χρησιμοποιήσεις το OpenAI, αλλιώς fallback στο Claude
+                if st.session_state.client_openai:
+                    try:
+                        response = st.session_state.client_openai.chat.completions.create(
+                            model="gpt-4o", # Ή "gpt-3.5-turbo" για ταχύτερη, πιο οικονομική απόκριση
+                            messages=[
+                                {"role": "system", "content": system_prompt_kira},
+                                {"role": "user", "content": user_message}
+                            ],
+                            temperature=0.7, # Ελέγχει την "δημιουργικότητα" της απάντησης
+                            max_tokens=1500 # Μέγιστο μήκος απάντησης
+                        )
+                        llm_response_content = response.choices[0].message.content
+                    except Exception as e:
+                        llm_response_content = f"Σφάλμα κατά την επικοινωνία με το OpenAI: {e}"
+                        st.error(llm_response_content)
+                elif st.session_state.client_claude: # Fallback to Claude if OpenAI is not available
+                    try:
+                        response = st.session_state.client_claude.messages.create(
+                            model="claude-3-opus-20240229", # Ή "claude-3-sonnet-20240229", "claude-3-haiku-20240307"
+                            max_tokens=1500,
+                            messages=[
+                                {"role": "system", "content": system_prompt_kira},
+                                {"role": "user", "content": user_message}
+                            ]
+                        )
+                        llm_response_content = response.content[0].text
+                    except Exception as e:
+                        llm_response_content = f"Σφάλμα κατά την επικοινωνία με το Claude: {e}"
+                        st.error(llm_response_content)
+                else:
+                    st.warning("Δεν βρέθηκε κανένα ενεργό API key για OpenAI ή Claude. Παρακαλώ ελέγξτε το αρχείο .env.")
+
+                st.markdown(llm_response_content)
         else:
             st.warning("Παρακαλώ περιγράψτε τα συμπτώματά σας για να λάβετε αξιολόγηση.")
     
     st.markdown("---")
     st.markdown(DISCLAIMER_TEXT)
 
-    # --- Ενότητα για API Key (Αργότερα) ---
+    # --- Ενότητα για API Key (πλέον δεν χρειάζεται, χρησιμοποιούμε .env) ---
+    # Η παρακάτω ενότητα σχολιάζεται γιατί πλέον φορτώνουμε τα κλειδιά από το .env αρχείο
     # st.sidebar.header("Ρυθμίσεις API (για developers)")
     # openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password")
     # if openai_api_key:
